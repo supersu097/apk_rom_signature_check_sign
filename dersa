@@ -1,0 +1,153 @@
+#!/bin/bash
+#===============================================================================
+#          FILE: dersa.sh
+#         USAGE: ./dersa.sh 
+# 
+#   DESCRIPTION: 
+#  REQUIREMENTS: ---
+#          BUGS: ---
+#         NOTES: ---
+#        AUTHOR: teddy.gan@antlauncher.com
+#  ORGANIZATION: Ant Tech Corp.
+#       CREATED: 12/05/2015 15:59
+#===============================================================================
+
+usage(){
+	cat <<- EOF
+	USAGE:
+	./$(basename "$0") OPTION FILENAME
+	./$(basename "$0") OPTION(-s) KEYPAIR_NAME
+	./$(basename "$0") OPTION(-c) PUBLIC_KEY_DIR FILENAME
+
+	OPTION:
+	-h|--help         : display this help and exit
+	-w|--whole        : Show whole public key info
+	-p|--part         : Show part public key info of apk or zip file 
+	-s|--sign         : Sign any .apk or .zip file
+	-c|--check        : check any .apk or .zip file whether it matches the keypair which the user assigned.
+	-m|--make         : Invoke AOSP's script to creat four key pairs
+
+	EXAMPLES:      
+	./$(basename "$0") -w ~/Download/dialer.apk
+	./$(basename "$0") -p ~/Download/dialer.apk
+	./$(basename "$0") -s ~/Download/media ~/Download/dialer.apk
+	./$(basename "$0") -c ~/Download/certkey/ ~/Download/dialer.apk
+	EOF
+}
+
+file_ck(){
+	if [ ! -f "$1" ];then
+		echo "The file of $1 do not exist!";exit 1
+	fi
+}
+
+initrsa(){
+	rsa=META-INF/CERT.RSA
+	tmp=/tmp/dersa_tmp
+	rm -r $tmp/META-INF 2>/dev/null
+	unzip "$1" $rsa -d $tmp >/dev/null 2>&1
+}
+
+dersa(){
+	openssl pkcs7 -inform DER -in $tmp/$rsa -noout -print_certs -text
+}
+
+suffix_ck(){
+	case "${1##*.}" in
+		apk|zip)
+			;;
+		*)
+			usage;echo -e "\nDon't support the file's suffix of .${1##*.}";exit 1
+	esac
+}
+
+if [ $# -gt 3 ] || [ $# -eq 0 ];then
+	usage;exit 1
+fi
+
+realpath=$(dirname "$(readlink -f "$0")")
+
+case $1 in
+	-h|--help)
+		usage;exit 0
+		;;
+
+	-w|--whole)
+		suffix_ck "$2";file_ck "$2";initrsa "$2";dersa
+		;;
+
+	-p|--part)
+		suffix_ck "$2";file_ck "$2";initrsa "$2"
+		for f in "keyid:" "Serial Number:" "Validity" "Not Before:" "Not After :" "Subject:"
+		do
+			dersa | grep --color=auto "$f"
+		done
+		;;
+
+	-s|--sign)
+		if [ ! -f "$2".x509.pem ] || [ ! -f "$2".pk8 ];then
+			usage
+			echo -e "\nThe keypair of $(2).x509.pem|.pk8 file don't exist.";exit 1
+		fi
+
+		suffix_ck "$3";file_ck "$3"
+		java -jar "$realpath"/signapk.jar -w "$2".x509.pem "$2".pk8 "$3" "$(basename "$3" ."${3##*.}")"_signed."${3##*.}"
+
+		if [ $? -eq 0 ];then
+			echo -e "\nThe signed $(basename "$3") is in $PWD!"
+		fi
+		;;
+
+	-m|--make)
+		keytool="$realpath/make_key"
+		file_ck "$keytool"
+		subject='/C=CN/ST=HangZhou/L=West Lake/O=ANT/OU=ANT/CN=ANT/emailAddress=teddy.gan@antlauncher.com'
+		echo -en "Do you want to use the default subject description of $subject (y/n)? "
+		read -r answer
+		case $answer in
+			y|Y)
+				;;
+			n|N)
+				echo -n "Pls enter your unique subject description: "
+				read -r unisub
+				subject=$unisub
+				;;
+			*)
+				echo "Invalid input!";exit 0
+				;;
+		esac
+		mkdir -p "$PWD"/certkey
+		for x in releasekey platform shared media; do
+			"$realpath"/make_key "$PWD"/certkey/$x "$subject"
+		done
+		echo -e "\nYour unique keypairs will be created in $PWD/certkey,"
+		echo -e "if previous steps are all well done."
+		echo -e "\nCredit for Google AOSP,I invoke some code from it,THX!"
+		;;
+
+	-c|--check)
+		if [ ! -d "$2" ];then
+			usage
+			echo -e "\nThe public key store dir of $2 don't exist!";exit 1
+		fi
+
+		suffix_ck "$3";file_ck "$3";initrsa "$3"
+
+		apk_snum=$(dersa | grep "Serial Number:")
+		for j in "$2"/*.x509.pem; do
+			pem_snum=$(openssl x509 -in "$j" -noout -text | grep "Serial Number:")
+			if [ "$apk_snum" = "$pem_snum" ];then
+				echo "The given file's signature of $3 matches"
+				echo "$j!"
+				exit 0
+			fi
+		done
+		echo "The given file's signature of $3 don't match any public key below:"
+		ls "$2"/*.x509.pem
+		;;
+
+	*)
+		usage;echo -e "\nThe OPTION of $1 is invalid";exit 1
+		;;
+esac
+
