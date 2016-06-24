@@ -2,6 +2,7 @@
 Feature:  
 1. show and check android apk and rom's signature  
 2. sign random apk and rom  
+3. creat four key pairs for android buliding use
 
 ```
 USAGE:
